@@ -1,0 +1,8 @@
+<config_plugin>
+    <config>
+        <project>*</project>
+        <step>*</step>
+        <property name="Variable" value="{meta.CatalogIDDigital}" />
+    </config>
+</config_plugin>
+                

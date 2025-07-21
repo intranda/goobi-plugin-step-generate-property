@@ -1,0 +1,8 @@
+<config_plugin>
+    <config>
+        <project>*</project>
+        <step>*</step>
+        <property name="Combined" value="{meta.CatalogIDDigital}_suffix" />
+    </config>
+</config_plugin>
+                

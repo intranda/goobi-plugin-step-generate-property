@@ -1,0 +1,7 @@
+<config_plugin>
+    <config>
+        <project>*</project>
+        <step>*</step>
+        <property name="User Location" value="{{schritte[0].bearbeitungsbenutzer.standort}}" />
+    </config>
+</config_plugin>

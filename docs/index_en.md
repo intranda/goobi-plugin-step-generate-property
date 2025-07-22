@@ -2,7 +2,7 @@
 title: Generate properties
 identifier: plugin_intranda_step_generate_property
 description: Step Plugin to generate properties
-published: false
+published: true
 ---
 
 ## Introduction

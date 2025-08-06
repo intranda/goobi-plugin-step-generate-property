@@ -19,58 +19,204 @@ package de.intranda.goobi.plugins;
  *
  */
 
+import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
+import de.intranda.goobi.plugins.generateproperty.ReflectionPathParser;
+import de.sub.goobi.helper.Helper;
+import de.sub.goobi.helper.VariableReplacer;
+import de.sub.goobi.helper.exceptions.SwapException;
+import de.sub.goobi.persistence.managers.PropertyManager;
+import lombok.Data;
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
+import org.apache.commons.configuration.HierarchicalConfiguration;
 import org.apache.commons.configuration.SubnodeConfiguration;
+import org.apache.commons.digester.plugins.PluginException;
+import org.goobi.beans.GoobiProperty;
+import org.goobi.beans.Process;
 import org.goobi.beans.Step;
-import org.goobi.production.enums.PluginGuiType;
-import org.goobi.production.enums.PluginReturnValue;
-import org.goobi.production.enums.PluginType;
-import org.goobi.production.enums.StepReturnValue;
+import org.goobi.production.enums.*;
 import org.goobi.production.plugin.interfaces.IStepPluginVersion2;
 
 import de.sub.goobi.config.ConfigPlugins;
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import net.xeoh.plugins.base.annotations.PluginImplementation;
+import ugh.dl.DigitalDocument;
+import ugh.dl.Fileformat;
+import ugh.exceptions.PreferencesException;
+import ugh.exceptions.ReadException;
 
 @PluginImplementation
 @Log4j2
 public class GeneratePropertyStepPlugin implements IStepPluginVersion2 {
+    private static final Pattern SPECIAL_PATTERN = Pattern.compile("\\{\\{(.*?)\\}\\}");
     
     @Getter
     private String title = "intranda_step_generate_property";
     @Getter
-    private Step step;
+    private Process process;
     @Getter
-    private String value;
-    @Getter 
-    private boolean allowTaskFinishButtons;
+    private Step step;
+
+    private List<PropertyDefinition> propertyDefinitions;
+    @Getter
+    private VariableReplacer variableReplacer;
+    @Getter
+    private DigitalDocument digitalDocument;
+
     private String returnPath;
+
+    @Data
+    @RequiredArgsConstructor
+    class PropertyDefinition {
+        @NonNull
+        private String name;
+        @NonNull
+        private String rawString;
+        @NonNull
+        private List<PropertyReplacement> replacements;
+
+        public String generate() throws PluginException {
+            var result = specialReplacement(rawString);
+            result = getVariableReplacer().replace(result);
+            for (PropertyReplacement r : replacements) {
+                result = r.replace(result);
+            }
+            return result;
+        }
+
+        private String specialReplacement(@NonNull String value) {
+            Matcher matcher = SPECIAL_PATTERN.matcher(value);
+            while (matcher.find()) {
+                String replacement = matcher.group(1);
+                value = value.replace("{{" + replacement + "}}", specialReplacementValue(replacement));
+                matcher = SPECIAL_PATTERN.matcher(value);
+            }
+            return value;
+        }
+
+        private String specialReplacementValue(String value) {
+            try {
+                return ReflectionPathParser.parse(process, value);
+            } catch (NullPointerException e) {
+                return "null";
+            } catch (NoSuchMethodException e) {
+                String message = "Error during special replacement, no such method: " + e.getMessage();
+                Helper.setFehlerMeldung(message);
+                Helper.addMessageToProcessJournal(process.getId(), LogType.ERROR, message);
+                log.error(message, e);
+                return value;
+            } catch (Exception e) {
+                String message = "Error during special replacement: " + e.getMessage();
+                Helper.setFehlerMeldung(message);
+                Helper.addMessageToProcessJournal(process.getId(), LogType.ERROR, message);
+                log.error(message, e);
+                throw new RuntimeException(message, e);
+            }
+        }
+    }
+
+    @RequiredArgsConstructor
+    class PropertyReplacement {
+        public String replace(String value) {
+            return value.replaceAll(regex, replacement);
+        }
+
+        @NonNull
+        private String regex;
+        @NonNull
+        private String replacement;
+    }
 
     @Override
     public void initialize(Step step, String returnPath) {
-        this.returnPath = returnPath;
+        log.debug("================= Starting GeneratePropertyPlugin =================");
         this.step = step;
-                
-        // read parameters from correct block in configuration file
-        SubnodeConfiguration myconfig = ConfigPlugins.getProjectAndStepConfig(title, step);
-        value = myconfig.getString("value", "default value"); 
-        allowTaskFinishButtons = myconfig.getBoolean("allowTaskFinishButtons", false);
-        log.info("GenerateProperty step plugin initialized");
+        this.process = step.getProzess();
+        this.returnPath = returnPath;
+        // TODO: Plugin initialization should also throw exceptions!
+        try {
+            this.digitalDocument = loadDigitalDocument();
+            this.variableReplacer = loadVariableReplacer();
+            SubnodeConfiguration myconfig = ConfigPlugins.getProjectAndStepConfig(title, step);
+            loadPluginConfiguration(myconfig);
+            log.info("GenerateProperty step plugin initialized");
+        } catch (PluginException e) {
+            log.error(e.getMessage());
+            log.error(e);
+        }
+    }
+
+    private DigitalDocument loadDigitalDocument() throws PluginException {
+        try {
+            return process.readMetadataFile().getDigitalDocument();
+        } catch (ReadException | IOException | SwapException | PreferencesException | NullPointerException e1) {
+            throw new PluginException("Errors happened while trying to initialize the Fileformat and VariableReplacer", e1);
+        }
+    }
+
+    private VariableReplacer loadVariableReplacer() throws PluginException {
+        try {
+            Fileformat fileformat = process.readMetadataFile();
+            return new VariableReplacer(fileformat != null ? fileformat.getDigitalDocument() : null,
+                    process.getRegelsatz().getPreferences(), process, step);
+        } catch (ReadException | IOException | SwapException | PreferencesException e1) {
+            throw new PluginException("Errors happened while trying to initialize the Fileformat and VariableReplacer", e1);
+        }
+    }
+
+    private void loadPluginConfiguration(SubnodeConfiguration config) throws PluginException {
+        try {
+            propertyDefinitions = config.configurationsAt("property")
+                    .stream()
+                    .map(this::parsePropertyDefinitions)
+                    .collect(Collectors.toList());
+        } catch (IllegalArgumentException e) {
+            throw new PluginException("Error during property definition parsing!", e);
+        }
+    }
+
+    private PropertyDefinition parsePropertyDefinitions(HierarchicalConfiguration config) throws IllegalArgumentException {
+        String name = config.getString("@name");
+        String value = config.getString("@value");
+        List<PropertyReplacement> replacements = parseReplacements(config.configurationsAt("replace"));
+        return new PropertyDefinition(name, value, replacements);
+    }
+
+    private @NonNull List<PropertyReplacement> parseReplacements(
+            List<HierarchicalConfiguration> replacementConfigs) {
+        return replacementConfigs.stream()
+                .map(config -> new PropertyReplacement(config.getString("@regex", ""),
+                        config.getString("@replacement", "")))
+                .toList();
+    }
+
+    private GoobiProperty savePropertyWithValue(String name, String value) {
+        GoobiProperty property = process.getProperties().stream()
+                .filter(p -> name.equals(p.getPropertyName()))
+                .findFirst()
+                .orElse(new GoobiProperty(GoobiProperty.PropertyOwnerType.PROCESS));
+        property.setOwner(process);
+        property.setPropertyName(name);
+        property.setPropertyValue(value);
+        PropertyManager.saveProperty(property);
+        return property;
     }
 
     @Override
     public PluginGuiType getPluginGuiType() {
-        return PluginGuiType.FULL;
-        // return PluginGuiType.PART;
-        // return PluginGuiType.PART_AND_FULL;
-        // return PluginGuiType.NONE;
+        return PluginGuiType.NONE;
     }
 
     @Override
     public String getPagePath() {
-        return "/uii/plugin_step_generate_property.xhtml";
+        return null;
     }
 
     @Override
@@ -80,12 +226,12 @@ public class GeneratePropertyStepPlugin implements IStepPluginVersion2 {
 
     @Override
     public String cancel() {
-        return "/uii" + returnPath;
+        return returnPath;
     }
 
     @Override
     public String finish() {
-        return "/uii" + returnPath;
+        return returnPath;
     }
     
     @Override
@@ -106,13 +252,17 @@ public class GeneratePropertyStepPlugin implements IStepPluginVersion2 {
 
     @Override
     public PluginReturnValue run() {
-        boolean successful = true;
-        // your logic goes here
-        
-        log.info("GenerateProperty step plugin executed");
-        if (!successful) {
+        try {
+            for (PropertyDefinition pd : propertyDefinitions) {
+                String propertyName = pd.getName();
+                String propertyValue = pd.generate();
+                savePropertyWithValue(propertyName, propertyValue);
+            }
+            log.info("GenerateProperty step plugin executed");
+            return PluginReturnValue.FINISH;
+        } catch (PluginException e) {
+            log.error("Error during property generation: {}", e.getMessage(), e);
             return PluginReturnValue.ERROR;
         }
-        return PluginReturnValue.FINISH;
     }
 }

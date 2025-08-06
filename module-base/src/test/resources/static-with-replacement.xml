@@ -1,0 +1,10 @@
+<config_plugin>
+    <config>
+        <project>*</project>
+        <step>*</step>
+        <property name="Static Text" value="Wis is static">
+            <replace regex="Wis" replacement="This" />
+        </property>
+    </config>
+</config_plugin>
+                

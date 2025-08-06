@@ -11,11 +11,23 @@
         <!-- which projects to use for (can be more then one, otherwise use *) -->
         <project>*</project>
         <step>*</step>
-        
-        <!-- sample parameter -->
-        <value>test</value>
-        <!-- display button to finish the task directly from within the entered plugin -->
-        <allowTaskFinishButtons>true</allowTaskFinishButtons>
+
+        <!-- static text -->
+        <property name="Static Text" value="Wis is static">
+            <replace regex="Wis" replacement="This" />
+        </property>
+
+        <!-- variable replacement -->
+        <property name="Variable" value="{meta.CatalogIDDigital}" />
+
+        <!-- combination -->
+        <property name="Combined Text" value="{meta.CatalogIDDigital}_suffix" />
+
+        <!-- special: 'Location' of the user who created the process -->
+        <property name="Archive Folder" value="{{schritte[0].bearbeitungsbenutzer.standort}}">
+            <replace regex="Handschriften" replacement="01_Handschriften" />
+            <replace regex="Musik" replacement="05_Musik" />
+        </property>
     </config>
 
 </config_plugin>

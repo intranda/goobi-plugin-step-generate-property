@@ -3,6 +3,10 @@ title: Generierung von Eigenschaften
 identifier: plugin_intranda_step_generate_property
 description: Step Plugin zum Generieren von Eigenschaften.
 published: true
+keywords:
+    - Goobi workflow
+    - Plugin
+    - Step Plugin
 ---
 
 ## Einführung
